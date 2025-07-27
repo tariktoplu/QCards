@@ -26,13 +26,13 @@ def run_quantum_simulation(initial_state: str | None, gate: str) -> str:
         elif gate.lower() == 'z':
             qc.z(0)
         elif gate.lower() == 'i':
-            qc.i(0)
+            qc.id(0) # CRITICAL FIX: Changed from qc.i(0) to qc.id(0)
 
         qc.measure(0, 0)
         
-        # Use the updated AerSimulator
         simulator = AerSimulator()
-        result = execute(qc, simulator, shots=1).result()
+        job = simulator.run(qc, shots=1)
+        result = job.result()
         counts = result.get_counts(qc)
         
         measured_state = list(counts.keys())[0]
@@ -54,7 +54,6 @@ def simulate_gate_operation(request: SimulationRequest):
     
     initial_ket = f'|{request.initial_state}>' if request.initial_state else '|0>'
     
-    # Handle special cases for H gate to return the "unmeasured" state string
     if request.gate.lower() == 'h':
         if initial_ket == '|0>':
             final_state = '|+>'
@@ -63,7 +62,6 @@ def simulate_gate_operation(request: SimulationRequest):
         else:
             final_state = run_quantum_simulation(request.initial_state, request.gate)
     else:
-        # For all other gates, just simulate the measurement
         if initial_ket == '|+>' or initial_ket == '|->':
             if initial_ket == '|+>':
                 temp_state = '0'
