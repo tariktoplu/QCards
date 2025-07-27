@@ -32,11 +32,7 @@ interface GameRoom {
     gateDeck: GateCard[];
   },
   rematchRequestedBy: string[];
-  lastMove: { // To track the last played cards for animation
-    playerId: string;
-    gateCardId: string;
-    qubitId: string;
-  } | null;
+  lastMove: { playerId: string; gateCardId: string; qubitId: string; } | null;
 }
 
 const gameRooms: { [key: string]: GameRoom } = {};
@@ -89,7 +85,7 @@ function resetRoomForRematch(room: GameRoom) {
   room.gameState = 'in-game';
   room.activeDeclaration = null;
   room.rematchRequestedBy = [];
-  room.lastMove = null; // Reset last move on rematch
+  room.lastMove = null;
   room.currentTurn = room.players[0].id;
   room.lastMessage = "Rematch started! Player 1's turn.";
 }
@@ -137,7 +133,7 @@ function resolveChallenge(room: GameRoom) {
   }
   room.currentTurn = challenger.id;
   room.activeDeclaration = null;
-  room.lastMove = null; // Clear highlight after challenge is resolved
+  room.lastMove = null;
   room.lastMessage += ` Now it's ${challenger.name}'s turn to play.`;
 }
 
@@ -148,46 +144,50 @@ app.get('/', (req: Request, res: Response) => {
 
 io.on('connection', (socket: Socket) => {
   console.log(`Player connected: ${socket.id}`);
-  let availableRoomId = Object.keys(gameRooms).find(id => gameRooms[id].players.length === 1 && gameRooms[id].gameState === 'in-game');
-  let currentRoom: GameRoom;
-
-  if (availableRoomId) {
-    currentRoom = gameRooms[availableRoomId];
-    const player2Hand = dealFromDeck(currentRoom.decks.qubitDeck, PLAYER_QUBIT_HAND_SIZE);
-    if (player2Hand.length > 0) { player2Hand[0].isFaceDown = false; player2Hand[0].state = '|0>'; }
-    const newPlayer: Player = { id: socket.id, name: `Player 2`, score: 0, hand: player2Hand, gateCards: dealFromDeck(currentRoom.decks.gateDeck, PLAYER_GATE_HAND_SIZE) };
-    currentRoom.players.push(newPlayer);
-    socket.join(currentRoom.roomId);
-    currentRoom.lastMessage = `${newPlayer.name} has joined! It's ${currentRoom.players[0].name}'s turn.`;
-  } else {
-    const roomId = `room_${socket.id}`;
-    const qubitDeck = shuffle(FULL_QUBIT_DECK);
-    const gateDeck = shuffle(FULL_GATE_DECK);
-    const player1Hand = dealFromDeck(qubitDeck, PLAYER_QUBIT_HAND_SIZE);
-    if (player1Hand.length > 0) { player1Hand[0].isFaceDown = false; player1Hand[0].state = '|0>'; }
-    const newRoom: GameRoom = {
-      roomId: roomId,
-      gameState: 'in-game',
-      decks: { qubitDeck, gateDeck },
-      players: [{ id: socket.id, name: 'Player 1', score: 0, hand: player1Hand, gateCards: dealFromDeck(gateDeck, PLAYER_GATE_HAND_SIZE) }],
-      targetState: "101",
-      currentTurn: socket.id,
-      activeDeclaration: null,
-      lastMessage: 'Waiting for another player...',
-      rematchRequestedBy: [],
-      lastMove: null, // Initialize lastMove
-    };
-    gameRooms[roomId] = newRoom;
-    currentRoom = newRoom;
-    socket.join(roomId);
-  }
-
-  currentRoom.players.forEach(player => {
-    const stateForPlayer = { ...currentRoom, myHand: player.hand, gateCards: player.gateCards };
-    io.to(player.id).emit('gameUpdate', stateForPlayer);
-  });
   
   const findRoomBySocketId = (socketId: string) => Object.values(gameRooms).find(r => r.players.some(p => p.id === socketId));
+
+  socket.on('join_game', (playerName: string) => {
+    console.log(`${playerName} (${socket.id}) is trying to join a game.`);
+    let availableRoomId = Object.keys(gameRooms).find(id => gameRooms[id].players.length === 1 && gameRooms[id].gameState === 'in-game');
+    let currentRoom: GameRoom;
+
+    if (availableRoomId) {
+      currentRoom = gameRooms[availableRoomId];
+      const player2Hand = dealFromDeck(currentRoom.decks.qubitDeck, PLAYER_QUBIT_HAND_SIZE);
+      if (player2Hand.length > 0) { player2Hand[0].isFaceDown = false; player2Hand[0].state = '|0>'; }
+      const newPlayer: Player = { id: socket.id, name: playerName, score: 0, hand: player2Hand, gateCards: dealFromDeck(currentRoom.decks.gateDeck, PLAYER_GATE_HAND_SIZE) };
+      currentRoom.players.push(newPlayer);
+      socket.join(currentRoom.roomId);
+      currentRoom.lastMessage = `${newPlayer.name} has joined! It's ${currentRoom.players[0].name}'s turn.`;
+    } else {
+      const roomId = `room_${socket.id}`;
+      const qubitDeck = shuffle(FULL_QUBIT_DECK);
+      const gateDeck = shuffle(FULL_GATE_DECK);
+      const player1Hand = dealFromDeck(qubitDeck, PLAYER_QUBIT_HAND_SIZE);
+      if (player1Hand.length > 0) { player1Hand[0].isFaceDown = false; player1Hand[0].state = '|0>'; }
+      const newRoom: GameRoom = {
+        roomId: roomId,
+        gameState: 'in-game',
+        decks: { qubitDeck, gateDeck },
+        players: [{ id: socket.id, name: playerName, score: 0, hand: player1Hand, gateCards: dealFromDeck(gateDeck, PLAYER_GATE_HAND_SIZE) }],
+        targetState: "101",
+        currentTurn: socket.id,
+        activeDeclaration: null,
+        lastMessage: `Welcome ${playerName}! Waiting for another player...`,
+        rematchRequestedBy: [],
+        lastMove: null,
+      };
+      gameRooms[roomId] = newRoom;
+      currentRoom = newRoom;
+      socket.join(roomId);
+    }
+
+    currentRoom.players.forEach(player => {
+      const stateForPlayer = { ...currentRoom, myHand: player.hand, gateCards: player.gateCards };
+      io.to(player.id).emit('gameUpdate', stateForPlayer);
+    });
+  });
 
   socket.on('play_and_declare', async (data: { qubitId: string, gateType: string, gateCardId: string, declaredState: string }) => {
     const room = findRoomBySocketId(socket.id);
@@ -198,12 +198,9 @@ io.on('connection', (socket: Socket) => {
       player.gateCards = player.gateCards.filter(card => card.id !== data.gateCardId);
       const newGateCards = dealFromDeck(room.decks.gateDeck, 1);
       if (newGateCards.length > 0) { player.gateCards.push(...newGateCards); }
-      
       cardToUpdate.state = await applyGate(cardToUpdate.state, data.gateType);
-      
       room.lastMove = { playerId: socket.id, gateCardId: data.gateCardId, qubitId: data.qubitId };
       room.activeDeclaration = { qubitId: data.qubitId, declaredState: data.declaredState, playerId: socket.id };
-      
       const opponent = room.players.find(p => p.id !== socket.id);
       if (opponent) {
         room.currentTurn = opponent.id;
@@ -218,7 +215,7 @@ io.on('connection', (socket: Socket) => {
     if (!room || room.gameState === 'game-over' || room.currentTurn !== socket.id) return;
     resolveChallenge(room);
     checkForWinner(room, io);
-    if (room.gameState !== 'game-over') {
+    if (room.gameState === 'in-game') {
       room.players.forEach(p => io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards }));
     }
   });
@@ -233,10 +230,10 @@ io.on('connection', (socket: Socket) => {
     }
     room.currentTurn = socket.id; 
     room.activeDeclaration = null;
-    room.lastMove = null; // Clear highlight after passing
+    room.lastMove = null;
     room.lastMessage += ` Now it's your turn to play.`;
     checkForWinner(room, io);
-    if (room.gameState !== 'game-over') {
+    if (room.gameState === 'in-game') {
       room.players.forEach(p => io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards }));
     }
   });
@@ -248,7 +245,6 @@ io.on('connection', (socket: Socket) => {
       room.rematchRequestedBy.push(socket.id);
     }
     if (room.rematchRequestedBy.length === room.players.length) {
-      console.log(`[SERVER] Both players ready for rematch in room ${room.roomId}. Resetting game...`);
       resetRoomForRematch(room);
     }
     room.players.forEach(p => {

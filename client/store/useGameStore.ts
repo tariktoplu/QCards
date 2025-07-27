@@ -8,8 +8,8 @@ export type GateCard = { id: string; type: 'H' | 'X' | 'Z' | 'I'; };
 
 // --- State & Actions Interfaces ---
 export interface GameState {
-  gameState: 'connecting' | 'lobby' | 'in-game' | 'game-over';
-  socket: Socket | null;
+  gameState: 'lobby' | 'in-game' | 'game-over'; // --- UPDATED
+  socket: typeof Socket | null;
   players: Player[];
   myHand: Qubit[];
   gateCards: GateCard[];
@@ -22,15 +22,16 @@ export interface GameState {
 }
 
 interface GameActions {
-  setSocket: (socket: Socket | null) => void;
+  setSocket: (socket: typeof Socket | null) => void;
   updateGameState: (newState: Partial<GameState>) => void;
+  joinGame: (playerName: string) => void; // --- NEW ACTION
 }
 
 type GameStore = GameState & GameActions;
 
-export const useGameStore = create<GameStore>((set) => ({
+export const useGameStore = create<GameStore>((set, get) => ({
   // --- STATE (Initial State) ---
-  gameState: 'connecting',
+  gameState: 'lobby', // --- UPDATED: Start in the lobby
   socket: null,
   players: [],
   myHand: [],
@@ -45,4 +46,10 @@ export const useGameStore = create<GameStore>((set) => ({
   // --- ACTIONS ---
   setSocket: (socket) => set({ socket }),
   updateGameState: (newState) => set(prevState => ({ ...prevState, ...newState })),
+  joinGame: (playerName) => {
+    const socket = get().socket;
+    if (socket && playerName) {
+      socket.emit('join_game', playerName);
+    }
+  },
 }));
