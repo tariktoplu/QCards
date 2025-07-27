@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
+import axios from 'axios'; // Import axios for making HTTP requests
 
 const app = express();
 const server = http.createServer(app);
@@ -26,7 +27,7 @@ interface GateCard {
 }
 
 interface Player {
-  id: string;
+  id:string;
   name: string;
   score: number;
   hand: Qubit[];
@@ -62,44 +63,51 @@ function dealGateCards(amount: number): GateCard[] {
   return FULL_GATE_DECK.slice(0, amount).map(card => ({...card, id: `${card.id}_${Math.random()}`}));
 }
 
-function applyGate(qubitState: string | null, gateType: string): string | null {
-  switch (gateType) {
-    case 'X':
-      if (qubitState === '|0>') return '|1>';
-      if (qubitState === '|1>') return '|0>';
-      return qubitState;
-    case 'Z':
-      return qubitState;
-    case 'H':
-      if (qubitState === '|0>') return '|+>';
-      if (qubitState === '|1>') return '|->';
-      return qubitState;
-    case 'I':
-      return qubitState;
-    default:
-      return qubitState;
+// THIS IS THE NEW ASYNC FUNCTION THAT REPLACES THE FAKE ONE
+async function applyGate(qubitState: string | null, gateType: string): Promise<string | null> {
+  console.log(`[SERVER] Sending simulation request to Python simulator...`);
+  try {
+    let initialStateForSim: string | null = null;
+    if (qubitState === '|0>') {
+      initialStateForSim = '0';
+    } else if (qubitState === '|1>') {
+      initialStateForSim = '1';
+    }
+
+    const response = await axios.post('http://localhost:8000/simulate', {
+      initial_state: initialStateForSim,
+      gate: gateType
+    });
+
+    const finalState = response.data.final_state;
+    console.log(`[SERVER] Received simulation result: ${finalState}`);
+    return finalState;
+
+  } catch (error) {
+    console.error("[SERVER] Error calling the simulation service:", error);
+    return "|error>";
   }
 }
 
 function resolveChallenge(room: GameRoom) {
-  if (!room.activeDeclaration) return;
-  const { activeDeclaration } = room;
-  const declarer = room.players.find(p => p.id === activeDeclaration.playerId);
-  const challenger = room.players.find(p => p.id !== activeDeclaration.playerId);
-  if (!declarer || !challenger) return;
-  const cardInHand = declarer.hand.find(c => c.id === activeDeclaration.qubitId);
-  const wasBluffSuccessful = cardInHand?.state === activeDeclaration.declaredState;
-  if (wasBluffSuccessful) {
-    challenger.score -= 1;
-    declarer.score += 2;
-    room.lastMessage = `Challenge FAILED! ${declarer.name}'s declaration was correct.`;
-  } else {
-    challenger.score += 2;
-    declarer.score -= 1;
-    room.lastMessage = `Challenge SUCCESSFUL! ${declarer.name} was bluffing.`;
-  }
-  room.currentTurn = declarer.id;
-  room.activeDeclaration = null;
+    if (!room.activeDeclaration) return;
+    const { activeDeclaration } = room;
+    const declarer = room.players.find(p => p.id === activeDeclaration.playerId);
+    const challenger = room.players.find(p => p.id !== activeDeclaration.playerId);
+    if (!declarer || !challenger) return;
+    const cardInHand = declarer.hand.find(c => c.id === activeDeclaration.qubitId);
+    const wasBluffSuccessful = cardInHand?.state === activeDeclaration.declaredState;
+    if (wasBluffSuccessful) {
+      challenger.score -= 1;
+      declarer.score += 2;
+      room.lastMessage = `Challenge FAILED! ${declarer.name}'s declaration was correct.`;
+    } else {
+      challenger.score += 2;
+      declarer.score -= 1;
+      room.lastMessage = `Challenge SUCCESSFUL! ${declarer.name} was bluffing.`;
+    }
+    room.currentTurn = declarer.id;
+    room.activeDeclaration = null;
 }
 
 // --- MAIN SERVER LOGIC ---
@@ -155,14 +163,18 @@ io.on('connection', (socket: Socket) => {
     return Object.values(gameRooms).find(r => r.players.some(p => p.id === socketId));
   };
 
-  socket.on('play_and_declare', (data: { qubitId: string, gateType: string, declaredState: string }) => {
+  // --- THIS EVENT HANDLER IS NOW ASYNC ---
+  socket.on('play_and_declare', async (data: { qubitId: string, gateType: string, declaredState: string }) => {
     const room = findRoomBySocketId(socket.id);
     if (!room || room.currentTurn !== socket.id) return;
     const { qubitId, gateType, declaredState } = data;
     const player = room.players.find(p => p.id === socket.id);
     const cardToUpdate = player?.hand.find(card => card.id === qubitId);
     if (player && cardToUpdate) {
-      cardToUpdate.state = applyGate(cardToUpdate.state, gateType);
+      // WE NOW 'AWAIT' THE RESULT FROM THE SIMULATOR
+      const newState = await applyGate(cardToUpdate.state, gateType);
+      cardToUpdate.state = newState;
+      
       room.activeDeclaration = { qubitId, declaredState, playerId: socket.id };
       const opponent = room.players.find(p => p.id !== socket.id);
       if (opponent) {
@@ -201,7 +213,10 @@ io.on('connection', (socket: Socket) => {
   
   socket.on('disconnect', () => {
     console.log(`Player disconnected: ${socket.id}`);
-    delete gameRooms[currentRoom.roomId];
+    const room = findRoomBySocketId(socket.id);
+    if (room) {
+      delete gameRooms[room.roomId];
+    }
   });
 });
 
