@@ -1,29 +1,34 @@
-'use client'; // This component must be a client component because it uses hooks
+'use client'; 
 
 import { useEffect } from 'react';
 import io from 'socket.io-client';
 import { useGameStore } from '../store/useGameStore';
-// Import the GameState type we just exported
 import type { GameState } from '../store/useGameStore'; 
 
 export default function SocketManager() {
-  // The 'state' in a selector is already inferred by Zustand, 
-  // so we don't need to manually type it here. This is cleaner.
   const setSocket = useGameStore((state) => state.setSocket);
   const updateGameState = useGameStore((state) => state.updateGameState);
 
   useEffect(() => {
-    const socket = io('http://localhost:4000');
+    // --- THIS IS THE FINAL VERSION OF THE CONNECTION LOGIC ---
+    // Read the server URL from an environment variable.
+    // This variable MUST start with NEXT_PUBLIC_ for Next.js to expose it to the browser.
+    // If the variable is not defined (e.g., in local development), it defaults to localhost.
+    const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000';
+    
+    // Log the URL being used for easier debugging.
+    console.log(`Connecting to server at: ${SERVER_URL}`);
+    
+    // Connect to the server using the determined URL.
+    const socket = io(SERVER_URL); 
 
     socket.on('connect', () => {
       console.log('✅ Successfully connected to the server! ID:', socket.id);
       setSocket(socket);
     });
 
-    // Listener that fires when a 'gameUpdate' message arrives from the server
-    // We explicitly type 'newState' here!
     socket.on('gameUpdate', (newState: Partial<GameState>) => {
-      console.log('[CLIENT SOCKET LOG] Received gameUpdate event with data:', newState);
+      console.log('🔄 Game state updated:', newState);
       updateGameState(newState);
     });
 

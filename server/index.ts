@@ -5,9 +5,14 @@ import axios from 'axios';
 
 const app = express();
 const server = http.createServer(app);
+
+// --- ENVIRONMENT VARIABLES ---
+const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
+const SIMULATOR_URL = process.env.SIMULATOR_URL || "http://localhost:8000";
+
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: CLIENT_URL.split(','),
     methods: ["GET", "POST"]
   }
 });
@@ -20,19 +25,10 @@ interface GateCard { id: string; type: 'H' | 'X' | 'Z' | 'I'; }
 interface Player { id: string; name: string; score: number; hand: Qubit[]; gateCards: GateCard[]; }
 interface Declaration { qubitId: string; declaredState: string; playerId: string; }
 interface GameRoom {
-  roomId: string;
-  players: Player[];
-  targetState: string;
-  currentTurn: string;
-  activeDeclaration: Declaration | null;
-  lastMessage: string | null;
-  gameState: 'in-game' | 'game-over';
-  decks: {
-    qubitDeck: Qubit[];
-    gateDeck: GateCard[];
-  },
-  rematchRequestedBy: string[];
-  lastMove: { playerId: string; gateCardId: string; qubitId: string; } | null;
+  roomId: string; players: Player[]; targetState: string; currentTurn: string;
+  activeDeclaration: Declaration | null; lastMessage: string | null; gameState: 'in-game' | 'game-over';
+  decks: { qubitDeck: Qubit[]; gateDeck: GateCard[]; };
+  rematchRequestedBy: string[]; lastMove: { playerId: string; gateCardId: string; qubitId: string; } | null;
 }
 
 const gameRooms: { [key: string]: GameRoom } = {};
@@ -41,13 +37,7 @@ const gameRooms: { [key: string]: GameRoom } = {};
 const WINNING_SCORE = 5;
 const PLAYER_QUBIT_HAND_SIZE = 3;
 const PLAYER_GATE_HAND_SIZE = 2;
-
-const FULL_QUBIT_DECK: Qubit[] = Array.from({ length: 20 }, (_, i) => ({
-  id: `q${i}_${Math.random()}`,
-  isFaceDown: true,
-  state: null,
-}));
-
+const FULL_QUBIT_DECK: Qubit[] = Array.from({ length: 20 }, (_, i) => ({ id: `q${i}_${Math.random()}`, isFaceDown: true, state: null }));
 const FULL_GATE_DECK: GateCard[] = [
   { id: 'g1', type: 'H' }, { id: 'g2', type: 'H' }, { id: 'g3', type: 'H' }, { id: 'g4', type: 'H' },
   { id: 'g5', type: 'X' }, { id: 'g6', type: 'X' }, { id: 'g7', type: 'X' }, { id: 'g8', type: 'X' },
@@ -91,12 +81,21 @@ function resetRoomForRematch(room: GameRoom) {
 }
 
 async function applyGate(qubitState: string | null, gateType: string): Promise<string | null> {
+  console.log(`[SERVER] Sending simulation request to Python simulator at ${SIMULATOR_URL}...`);
   try {
     let initialStateForSim: string | null = null;
     if (qubitState === '|0>') initialStateForSim = '0';
     else if (qubitState === '|1>') initialStateForSim = '1';
-    const response = await axios.post('http://localhost:8000/simulate', { initial_state: initialStateForSim, gate: gateType });
-    return response.data.final_state;
+    
+    // --- THIS IS THE CRITICAL UPDATE ---
+    const response = await axios.post(`${SIMULATOR_URL}/simulate`, {
+      initial_state: initialStateForSim,
+      gate: gateType
+    });
+
+    const finalState = response.data.final_state;
+    console.log(`[SERVER] Received simulation result: ${finalState}`);
+    return finalState;
   } catch (error) {
     console.error("[SERVER] Error calling simulation service:", error);
     return "|error>";

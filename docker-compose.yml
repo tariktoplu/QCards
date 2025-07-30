@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  client:
+    build: ./client
+    ports:
+      - "3000:3000"
+    networks:
+      - qbluff-net
+
+  server:
+    build: ./server
+    ports:
+      - "4000:4000"
+    networks:
+      - qbluff-net
+    # Wait for the simulator to be healthy before starting
+    depends_on:
+      simulator:
+        condition: service_started
+
+  simulator:
+    build: ./simulator
+    ports:
+      - "8000:8000"
+    networks:
+      - qbluff-net
+
+networks:
+  qbluff-net:
+    driver: bridge
