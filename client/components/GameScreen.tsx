@@ -34,7 +34,7 @@ export default function GameScreen() {
   const handleDeclareState = () => {
     if (!socket || !qubitToDeclare || !selectedGate) return;
     socket.emit('play_and_declare', {
-      qubitId: qubitToDeclare.id,
+      targetQubitId: qubitToDeclare.id,
       gateType: selectedGate.type,
       gateCardId: selectedGate.id,
       declaredState: declarationInput

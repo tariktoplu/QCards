@@ -5,20 +5,18 @@ export const WINNING_SCORE = 5;
 const PLAYER_QUBIT_HAND_SIZE = 3;
 const PLAYER_GATE_HAND_SIZE = 3;
 
-// --- CRITICAL FIX 1: Create a "template" deck with simple, non-random IDs ---
-const FULL_QUBIT_DECK_TEMPLATE: Qubit[] = Array.from({ length: 20 }, (_, i) => ({
-  id: `q${i}`, // Simple ID, e.g., 'q1', 'q2'
+// Create "template" decks. They don't need any ID at all.
+const FULL_QUBIT_DECK_TEMPLATE: Omit<Qubit, 'id'>[] = Array.from({ length: 20 }, () => ({
   isFaceDown: true,
   state: null,
 }));
 
-const FULL_GATE_DECK_TEMPLATE: GateCard[] = [
-    { id: 'g1', type: 'H' }, { id: 'g2', type: 'H' }, { id: 'g3', type: 'X' }, { id: 'g4', type: 'X' },
-    { id: 'g5', type: 'Z' }, { id: 'g6', type: 'Z' }, { id: 'g7', type: 'I' }, { id: 'g8', type: 'I' },
-    { id: 'g9', type: 'CNOT' }, { id: 'g10', type: 'CNOT' }, { id: 'g11', type: 'CNOT' }, { id: 'g12', type: 'CNOT' },
+const FULL_GATE_DECK_TEMPLATE: Omit<GateCard, 'id'>[] = [
+    { type: 'H' }, { type: 'H' }, { type: 'X' }, { type: 'X' },
+    { type: 'Z' }, { type: 'Z' }, { type: 'I' }, { type: 'I' },
+    { type: 'CNOT' }, { type: 'CNOT' }, { type: 'CNOT' }, { type: 'CNOT' },
 ];
 
-// In-memory storage for our game rooms.
 export const gameRooms: { [key: string]: GameRoom } = {};
 
 // --- HELPER FUNCTIONS ---
@@ -31,25 +29,40 @@ function shuffle<T>(array: T[]): T[] {
   return newArray;
 }
 
-// --- CRITICAL FIX 2: This function now creates unique instances of cards when dealing ---
-export function dealFromDeck<T extends { id: string }>(deck: T[], amount: number): T[] {
-  const cardsToDeal = deck.slice(0, amount); // Take cards from the top
-  deck.splice(0, amount); // Remove them from the deck
-  // Create a new copy of each card with a new, truly unique ID for this specific game instance
-  return cardsToDeal.map(card => ({ ...card, id: `${card.id}_${Math.random()}` }));
+// dealFromDeck is now simpler, it just takes items from the deck.
+export function dealFromDeck<T>(deck: T[], amount: number): T[] {
+  return deck.splice(0, amount);
+}
+
+// createHandWithIds is now the ONLY place where IDs are created.
+export function createHandWithIds<T extends {}>(cards: T[], prefix: string): (T & { id: string })[] {
+    return cards.map((card, i) => ({
+        ...card,
+        id: `${prefix}_${Date.now()}_${Math.random()}` // A guaranteed unique ID
+    }));
 }
 
 export function createNewRoom(roomId: string, playerId: string, playerName: string): GameRoom {
     const qubitDeck = shuffle(FULL_QUBIT_DECK_TEMPLATE);
     const gateDeck = shuffle(FULL_GATE_DECK_TEMPLATE);
-    const player1Hand = dealFromDeck(qubitDeck, PLAYER_QUBIT_HAND_SIZE);
+    
+    const player1QubitTemplates = dealFromDeck(qubitDeck, PLAYER_QUBIT_HAND_SIZE);
+    const player1GateTemplates = dealFromDeck(gateDeck, PLAYER_GATE_HAND_SIZE);
+
+    const player1Hand = createHandWithIds(player1QubitTemplates, 'q');
     if (player1Hand.length > 0) { player1Hand[0].isFaceDown = false; player1Hand[0].state = '|0>'; }
     
     return {
       roomId: roomId,
       gameState: 'in-game',
       decks: { qubitDeck, gateDeck },
-      players: [{ id: playerId, name: playerName, score: 0, hand: player1Hand, gateCards: dealFromDeck(gateDeck, PLAYER_GATE_HAND_SIZE) }],
+      players: [{ 
+          id: playerId, 
+          name: playerName, 
+          score: 0, 
+          hand: player1Hand, 
+          gateCards: createHandWithIds(player1GateTemplates, 'g') 
+      }],
       targetState: "101",
       currentTurn: playerId,
       activeDeclaration: null,
@@ -60,24 +73,39 @@ export function createNewRoom(roomId: string, playerId: string, playerName: stri
 }
 
 export function addPlayerToRoom(room: GameRoom, playerId: string, playerName: string): Player {
-    const player2Hand = dealFromDeck(room.decks.qubitDeck, PLAYER_QUBIT_HAND_SIZE);
+    const player2QubitTemplates = dealFromDeck(room.decks.qubitDeck, PLAYER_QUBIT_HAND_SIZE);
+    const player2GateTemplates = dealFromDeck(room.decks.gateDeck, PLAYER_GATE_HAND_SIZE);
+    
+    const player2Hand = createHandWithIds(player2QubitTemplates, 'q');
     if (player2Hand.length > 0) { player2Hand[0].isFaceDown = false; player2Hand[0].state = '|0>'; }
-    const newPlayer: Player = { id: playerId, name: playerName, score: 0, hand: player2Hand, gateCards: dealFromDeck(room.decks.gateDeck, PLAYER_GATE_HAND_SIZE) };
+
+    const newPlayer: Player = { 
+        id: playerId, 
+        name: playerName, 
+        score: 0, 
+        hand: player2Hand, 
+        gateCards: createHandWithIds(player2GateTemplates, 'g') 
+    };
     room.players.push(newPlayer);
     room.lastMessage = `${newPlayer.name} has joined! It's ${room.players[0].name}'s turn.`;
     return newPlayer;
 }
+
 
 export function resetRoomForRematch(room: GameRoom) {
   room.players.forEach(p => p.score = 0);
   const qubitDeck = shuffle(FULL_QUBIT_DECK_TEMPLATE);
   const gateDeck = shuffle(FULL_GATE_DECK_TEMPLATE);
   room.decks = { qubitDeck, gateDeck };
+  
   room.players.forEach(p => {
-    p.hand = dealFromDeck(qubitDeck, PLAYER_QUBIT_HAND_SIZE);
-    p.gateCards = dealFromDeck(gateDeck, PLAYER_GATE_HAND_SIZE);
+    const qubitTemplates = dealFromDeck(qubitDeck, PLAYER_QUBIT_HAND_SIZE);
+    const gateTemplates = dealFromDeck(gateDeck, PLAYER_GATE_HAND_SIZE);
+    p.hand = createHandWithIds(qubitTemplates, 'q');
+    p.gateCards = createHandWithIds(gateTemplates, 'g');
     if (p.hand.length > 0) { p.hand[0].isFaceDown = false; p.hand[0].state = '|0>'; }
   });
+
   room.gameState = 'in-game';
   room.activeDeclaration = null;
   room.rematchRequestedBy = [];

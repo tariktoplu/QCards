@@ -1,9 +1,0 @@
-version: "2"
-authtoken: 30YHtMOBLuLRfeTFj8PpxbciEnD_6u9WKiv84kKfwZRR4bu5j
-tunnels:
-  client:
-    proto: http
-    addr: 3000
-  server:
-    proto: http
-    addr: 4000
