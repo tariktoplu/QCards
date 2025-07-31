@@ -29,63 +29,87 @@ export function initializeSocketEvents(io: Server) {
         io.to(player.id).emit('gameUpdate', { ...currentRoom, myHand: player.hand, gateCards: player.gateCards });
       });
     });
-    
-    socket.on('play_and_declare', async (data: { gateCardId: string, gateType: string, qubitId: string, declaredState: string }) => {
-        // --- NOTE: Changed 'targetQubitId' to 'qubitId' to match what the client is sending ---
-        console.log(`[DEBUG] Received 'play_and_declare' from ${socket.id}`, data);
+    socket.on('play_and_declare', async (data: {
+      gateCardId: string,
+      gateType: string,
+      targetQubitId: string,
+      controlQubitId?: string,
+      declaredState: string
+    }) => {
+        console.log(`[DEBUG] 1. Received 'play_and_declare' from ${socket.id}`, data);
 
         const room = findRoomBySocketId(socket.id);
-        if (!room) {
-            console.error(`[DEBUG] ERROR: Room not found for socket ${socket.id}`);
-            return;
-        }
-        if (room.gameState === 'game-over') {
-            console.warn(`[DEBUG] Game is over. Move rejected.`);
-            return;
-        }
-        if (room.currentTurn !== socket.id) {
-            console.warn(`[DEBUG] Not player's turn. Current turn: ${room.currentTurn}, Player: ${socket.id}`);
+        if (!room || room.gameState === 'game-over' || room.currentTurn !== socket.id) {
+            console.error(`[DEBUG] 1a. Validation failed. Room: ${!!room}, GameState: ${room?.gameState}, Turn: ${room?.currentTurn}`);
             return;
         }
         
         const player = room.players.find(p => p.id === socket.id);
         if (!player) {
-            console.error(`[DEBUG] ERROR: Player object not found for socket ${socket.id}`);
+            console.error(`[DEBUG] 1b. Player object not found.`);
             return;
         }
         
-        // --- CRITICAL FIX: Use 'data.qubitId' which is what the client sends ---
-        const cardToUpdate = player.hand.find(card => card.id === data.qubitId); 
-        if (!cardToUpdate) {
-            console.error(`[DEBUG] ERROR: Target card with ID ${data.qubitId} not found in player's hand. Hand:`, player.hand);
-            return;
+        let finalState: string | null = null;
+        let targetOwner = player;
+        
+        console.log(`[DEBUG] 2. Gate type is '${data.gateType}'`);
+
+        // --- CNOT LOGIC ---
+        if (data.gateType === 'CNOT') {
+            if (!data.controlQubitId) {
+                console.error(`[DEBUG] CNOT ERROR: controlQubitId is missing.`);
+                return;
+            }
+            const controlCard = player.hand.find(c => c.id === data.controlQubitId);
+            const opponent = room.players.find(p => p.id !== socket.id);
+            
+            let targetCard = player.hand.find(c => c.id === data.targetQubitId);
+            if (!targetCard && opponent) {
+                targetCard = opponent.hand.find(c => c.id === data.targetQubitId);
+                if (targetCard) targetOwner = opponent;
+            }
+
+            if (controlCard && targetCard) {
+                console.log(`[DEBUG] 3a. CNOT target found. Control=${controlCard.state}, Target=${targetCard.state}`);
+                finalState = await applyGate(targetCard.state, 'CNOT', controlCard.state);
+                targetCard.state = finalState;
+            } else {
+                console.error(`[DEBUG] CNOT ERROR: Control or Target card not found. Control: ${!!controlCard}, Target: ${!!targetCard}`);
+            }
+        } 
+        // --- SINGLE QUBIT GATE LOGIC ---
+        else {
+            const targetCard = player.hand.find(card => card.id === data.targetQubitId);
+            if (targetCard) {
+                console.log(`[DEBUG] 3b. Single-Qubit target found. State=${targetCard.state}`);
+                finalState = await applyGate(targetCard.state, data.gateType);
+                targetCard.state = finalState;
+            } else {
+                console.error(`[DEBUG] SINGLE-QUBIT ERROR: Target card not found.`);
+            }
         }
         
-        console.log(`[DEBUG] All checks passed for player ${player.name}. Applying gate...`);
-
-        // Apply game logic
-        player.gateCards = player.gateCards.filter(card => card.id !== data.gateCardId);
-        const newGateCards = dealFromDeck(room.decks.gateDeck, 1);
-        if (newGateCards.length > 0) player.gateCards.push(...newGateCards);
-
-        const oldState = cardToUpdate.state;
-        cardToUpdate.state = await applyGate(cardToUpdate.state, data.gateType);
-        console.log(`[DEBUG] Card state changed from ${oldState} to ${cardToUpdate.state}`);
-
-        room.activeDeclaration = { qubitId: data.qubitId, declaredState: data.declaredState, playerId: socket.id };
-        room.lastMove = { playerId: socket.id, gateCardId: data.gateCardId, qubitId: data.qubitId };
-        
-        const opponent = room.players.find(p => p.id !== socket.id);
-        if (opponent) {
-            room.currentTurn = opponent.id;
-            room.lastMessage = `${player.name} declared state ${data.declaredState}. It's ${opponent.name}'s turn.`;
+        // Check if a gate was successfully applied
+        console.log(`[DEBUG] 4. Final state after applyGate: ${finalState}`);
+        if (finalState !== null && finalState !== "|error>") {
+            player.gateCards = player.gateCards.filter(card => card.id !== data.gateCardId);
+            const newGateCards = dealFromDeck(room.decks.gateDeck, 1);
+            if (newGateCards.length > 0) player.gateCards.push(...newGateCards);
+            
+            room.activeDeclaration = { qubitId: data.targetQubitId, declaredState: data.declaredState, playerId: socket.id };
+            room.lastMove = { playerId: socket.id, gateCardId: data.gateCardId, qubitId: data.targetQubitId };
+            const opponent = room.players.find(p => p.id !== socket.id);
+            if (opponent) {
+                room.currentTurn = opponent.id;
+                room.lastMessage = `${player.name} played a ${data.gateType} gate. It's ${opponent.name}'s turn to respond.`;
+            }
+            
+            console.log(`[DEBUG] 5. Move successful. Emitting 'gameUpdate'. New turn: ${room.currentTurn}`);
+            room.players.forEach(p => io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards }));
+        } else {
+            console.error(`[DEBUG] 5a. Move failed. finalState was null or an error. Not updating turn.`);
         }
-        
-        // This is the most critical part: send the update back to ALL clients in the room
-        console.log(`[DEBUG] Move successful. Emitting 'gameUpdate' to room ${room.roomId}. New turn is for ${room.currentTurn}`);
-        room.players.forEach(p => {
-          io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards });
-        });
     });
 
     socket.on('challenge_bluff', () => {
