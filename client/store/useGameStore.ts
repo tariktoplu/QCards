@@ -4,11 +4,11 @@ import { Socket } from 'socket.io-client';
 // --- Reusable Types ---
 export type Qubit = { id: string; isFaceDown: boolean; state: string | null; };
 export type Player = { id: string; name: string; score: number; hand: Qubit[]; };
-export type GateCard = { id: string; type: 'H' | 'X' | 'Z' | 'I'; };
+export type GateCard = { id: string; type: 'H' | 'X' | 'Z' | 'I' | 'CNOT'; };
 
 // --- State & Actions Interfaces ---
 export interface GameState {
-  gameState: 'lobby' | 'in-game' | 'game-over'; // --- UPDATED
+  gameState: 'lobby' | 'in-game' | 'game-over';
   socket: typeof Socket | null;
   players: Player[];
   myHand: Qubit[];
@@ -24,14 +24,14 @@ export interface GameState {
 interface GameActions {
   setSocket: (socket: typeof Socket | null) => void;
   updateGameState: (newState: Partial<GameState>) => void;
-  joinGame: (playerName: string) => void; // --- NEW ACTION
+  joinGame: (playerName: string) => void; // Define the action type here
 }
 
 type GameStore = GameState & GameActions;
 
 export const useGameStore = create<GameStore>((set, get) => ({
   // --- STATE (Initial State) ---
-  gameState: 'lobby', // --- UPDATED: Start in the lobby
+  gameState: 'lobby',
   socket: null,
   players: [],
   myHand: [],
@@ -46,7 +46,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   // --- ACTIONS ---
   setSocket: (socket) => set({ socket }),
   updateGameState: (newState) => set(prevState => ({ ...prevState, ...newState })),
-  joinGame: (playerName) => {
+  
+  // --- CRITICAL FIX: Add the type 'string' to the parameter ---
+  joinGame: (playerName: string) => {
     const socket = get().socket;
     if (socket && playerName) {
       socket.emit('join_game', playerName);
