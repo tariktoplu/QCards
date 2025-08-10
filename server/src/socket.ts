@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { GameRoom } from './types/game';
-import { gameRooms, createNewRoom, addPlayerToRoom, resetRoomForRematch, dealFromDeck, createHandWithIds } from './game/state';
+import { gameRooms, createNewRoom, addPlayerToRoom, resetRoomForRematch, dealFromDeck, createHandWithIds, WINNING_SCORE } from './game/state';
 import { applyGate, resolveChallenge, checkForWinner, checkTargetStateBonus } from './game/logic';
 
 export function initializeSocketEvents(io: Server) {
@@ -10,21 +10,23 @@ export function initializeSocketEvents(io: Server) {
     const findRoomBySocketId = (socketId: string) => Object.values(gameRooms).find(r => r.players.some(p => p.id === socketId));
 
     socket.on('join_game', (playerName: string) => {
-        let availableRoom = Object.values(gameRooms).find(r => r.players.length === 1 && r.gameState === 'in-game');
-        let currentRoom: GameRoom;
-        if (availableRoom) {
-            currentRoom = availableRoom;
-            addPlayerToRoom(currentRoom, socket.id, playerName);
-            socket.join(currentRoom.roomId);
-        } else {
-            const roomId = `room_${socket.id}`;
-            currentRoom = createNewRoom(roomId, socket.id, playerName);
-            gameRooms[roomId] = currentRoom;
-            socket.join(roomId);
-        }
-        currentRoom.players.forEach(player => {
-            io.to(player.id).emit('gameUpdate', { ...currentRoom, myHand: player.hand, gateCards: player.gateCards });
-        });
+      let availableRoom = Object.values(gameRooms).find(r => r.players.length === 1 && r.gameState === 'in-game');
+      let currentRoom: GameRoom;
+
+      if (availableRoom) {
+        currentRoom = availableRoom;
+        addPlayerToRoom(currentRoom, socket.id, playerName);
+        socket.join(currentRoom.roomId);
+      } else {
+        const roomId = `room_${socket.id}`;
+        currentRoom = createNewRoom(roomId, socket.id, playerName);
+        gameRooms[roomId] = currentRoom;
+        socket.join(roomId);
+      }
+
+      currentRoom.players.forEach(player => {
+        io.to(player.id).emit('gameUpdate', { ...currentRoom, myHand: player.hand, gateCards: player.gateCards });
+      });
     });
     
     socket.on('play_and_declare', async (data: {
@@ -74,10 +76,16 @@ export function initializeSocketEvents(io: Server) {
         if (finalState !== null && finalState !== "|error>") {
             player.gateCards = player.gateCards.filter(card => card.id !== data.gateCardId);
             const newGateCardTemplates = dealFromDeck(room.decks.gateDeck, 1);
-            if (newGateCardTemplates.length > 0) {
-              const newGateCards = createHandWithIds(newGateCardTemplates, 'g');
-              player.gateCards.push(...newGateCards);
+
+            if (newGateCardTemplates.length === 0) {
+                room.gameState = 'game-over';
+                room.lastMessage = 'The Gate Deck is empty! The game is a draw.';
+                room.players.forEach(p => io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards }));
+                return;
             }
+            
+            const newGateCards = createHandWithIds(newGateCardTemplates, 'g');
+            player.gateCards.push(...newGateCards);
             
             room.activeDeclaration = { qubitId: data.targetQubitId, declaredState: data.declaredState, playerId: socket.id };
             room.lastMove = { playerId: socket.id, gateCardId: data.gateCardId, qubitId: data.targetQubitId };
@@ -149,7 +157,25 @@ export function initializeSocketEvents(io: Server) {
     socket.on('disconnect', () => {
         console.log(`Player disconnected: ${socket.id}`);
         const room = findRoomBySocketId(socket.id);
+        
         if (room) {
+            const remainingPlayer = room.players.find(p => p.id !== socket.id);
+            
+            if (remainingPlayer && room.gameState === 'in-game') {
+                const disconnectedPlayer = room.players.find(p => p.id === socket.id);
+                room.gameState = 'game-over';
+                room.lastMessage = `${disconnectedPlayer?.name || 'Opponent'} has disconnected. You win by default!`;
+                
+                remainingPlayer.score = WINNING_SCORE;
+                
+                io.to(remainingPlayer.id).emit('gameUpdate', {
+                    ...room,
+                    myHand: remainingPlayer.hand,
+                    gateCards: remainingPlayer.gateCards,
+                    players: room.players
+                });
+            }
+            
             delete gameRooms[room.roomId];
         }
     });
