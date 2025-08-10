@@ -1,7 +1,21 @@
 export interface Qubit { id: string; isFaceDown: boolean; state: string | null; }
 export interface GateCard { id: string; type: 'H' | 'X' | 'Z' | 'I' | 'CNOT'; }
-export interface Player { id: string; name: string; score: number; hand: Qubit[]; gateCards: GateCard[]; }
-export interface Declaration { qubitId: string; declaredState: string; playerId: string; }
+
+export interface Player {
+  id: string;
+  name: string;
+  score: number;
+  hand: Qubit[];
+  gateCards: GateCard[];
+  bluffTokens: number;
+}
+
+export interface Declaration {
+  qubitId: string;
+  declaredState: string;
+  playerId: string;
+  usedBluffToken: boolean;
+}
 
 export interface GameRoom {
   roomId: string;
@@ -19,4 +33,7 @@ export interface GameRoom {
   lastMove: { playerId: string; gateCardId: string; qubitId: string; } | null;
   revealedCard: { id: string; finalState: string; } | null;
   entangledPair: { controlId: string; targetId: string; } | null;
+  round: number;
+  maxRounds: number;
+  timer: number;
 }

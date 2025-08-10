@@ -10,70 +10,58 @@ export default function GameScreen() {
   const { 
     socket, gameState, myHand, gateCards, players,
     currentTurn, activeDeclaration, lastMessage, rematchRequestedBy, lastMove,
-    targetState, revealedCard // Get the revealedCard state
+    targetState, revealedCard, timer, round, maxRounds
   } = useGameStore();
   
   const myPlayerId = socket?.id;
   const isMyTurn = currentTurn === myPlayerId && !activeDeclaration;
   const opponent = players.find(p => p.id !== myPlayerId);
+  const me = players.find(p => p.id === myPlayerId);
 
   const [selectedGate, setSelectedGate] = useState<{id: string, type: string} | null>(null);
   const [controlQubit, setControlQubit] = useState<string | null>(null);
   const [targetQubit, setTargetQubit] = useState<{id: string, name: string} | null>(null);
   const [declarationInput, setDeclarationInput] = useState<string>('|+>');
+  const [useBluffToken, setUseBluffToken] = useState(false);
 
-  // Effect to clear selections when the turn changes, to prevent stale selections
   useEffect(() => {
-    setSelectedGate(null);
-    setControlQubit(null);
-    setTargetQubit(null);
+    setSelectedGate(null); setControlQubit(null); setTargetQubit(null);
   }, [currentTurn]);
 
   const handleGateCardClick = (id: string, type: string) => {
     if (!isMyTurn) return;
-    setControlQubit(null);
-    setTargetQubit(null);
-    if (selectedGate && selectedGate.id === id) {
-      setSelectedGate(null);
-    } else {
-      setSelectedGate({ id, type });
-    }
+    setControlQubit(null); setTargetQubit(null);
+    if (selectedGate && selectedGate.id === id) setSelectedGate(null);
+    else setSelectedGate({ id, type });
   };
   
   const handleQubitCardClick = (qubitId: string, index: number, isOpponentCard: boolean, isFaceDown: boolean) => {
-    if (!isMyTurn || !selectedGate || (isFaceDown && !isOpponentCard)) return;
+    if (!isMyTurn || !selectedGate) return;
+    if (isFaceDown && isOpponentCard) {
+        if (selectedGate.type !== 'CNOT' || !controlQubit) return;
+    }
     const qubitName = `${isOpponentCard ? "Opponent's" : "Your"} Qubit ${index + 1}`;
     if (selectedGate.type === 'CNOT') {
-      if (!controlQubit && !isOpponentCard) {
-        setControlQubit(qubitId);
-        return;
+      if (!controlQubit && !isOpponentCard && !isFaceDown) {
+        setControlQubit(qubitId); return;
       }
       if (controlQubit && controlQubit !== qubitId) {
-        setTargetQubit({ id: qubitId, name: qubitName });
-        return;
+        setTargetQubit({ id: qubitId, name: qubitName }); return;
       }
-    } 
-    else {
-      if (isOpponentCard) return;
+    } else {
+      if (isOpponentCard || isFaceDown) return;
       setTargetQubit({ id: qubitId, name: qubitName });
     }
   };
 
   const handleDeclareState = () => {
     if (!socket || !targetQubit || !selectedGate) return;
-    const payload: any = {
-      gateCardId: selectedGate.id,
-      gateType: selectedGate.type,
-      targetQubitId: targetQubit.id,
-      declaredState: declarationInput,
-    };
-    if (selectedGate.type === 'CNOT' && controlQubit) {
-      payload.controlQubitId = controlQubit;
-    }
-    socket.emit('play_and_declare', payload);
-    setTargetQubit(null);
-    setSelectedGate(null);
-    setControlQubit(null);
+    socket.emit('play_and_declare', {
+      gateCardId: selectedGate.id, gateType: selectedGate.type,
+      targetQubitId: targetQubit.id, declaredState: declarationInput,
+      controlQubitId: controlQubit, usedBluffToken: useBluffToken
+    });
+    setTargetQubit(null); setSelectedGate(null); setControlQubit(null); setUseBluffToken(false);
   };
   
   const handleChallenge = () => { if (socket) socket.emit('challenge_bluff'); };
@@ -82,16 +70,7 @@ export default function GameScreen() {
 
   const renderActionPanel = () => {
     if (activeDeclaration && currentTurn === myPlayerId) {
-        return (
-            <div className="mt-4 p-4 bg-slate-700 rounded-lg text-center">
-              <h3 className="text-lg font-bold mb-2">Opponent declared state: <span className="text-yellow-300 font-mono">{activeDeclaration.declaredState}</span></h3>
-              <p>Do you challenge?</p>
-              <div className="flex justify-center space-x-4 mt-2">
-                <button onClick={handleChallenge} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Challenge</button>
-                <button onClick={handlePass} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Pass</button>
-              </div>
-            </div>
-        );
+        return ( <div className="mt-4 p-4 bg-slate-700 rounded-lg text-center"> <h3 className="text-lg font-bold mb-2">Opponent declared state: <span className="text-yellow-300 font-mono">{activeDeclaration.declaredState}</span></h3> <p>Do you challenge?</p> <div className="flex justify-center space-x-4 mt-2"> <button onClick={handleChallenge} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Challenge</button> <button onClick={handlePass} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Pass</button> </div> </div> );
     }
     if (targetQubit) {
         return (
@@ -99,6 +78,12 @@ export default function GameScreen() {
               <h3 className="text-lg font-bold mb-2">Declare new state for Target: <span className="text-cyan-300">{targetQubit.name}</span></h3>
               <input type="text" value={declarationInput} onChange={(e) => setDeclarationInput(e.target.value)} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 mr-2" />
               <button onClick={handleDeclareState} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Declare</button>
+              {me && me.bluffTokens > 0 && (
+                <div className="mt-2 text-sm flex items-center justify-center">
+                  <input type="checkbox" id="bluffToken" checked={useBluffToken} onChange={(e) => setUseBluffToken(e.target.checked)} disabled={me.bluffTokens <= 0} className="h-4 w-4 bg-slate-700 border-slate-500"/>
+                  <label htmlFor="bluffToken" className="ml-2 text-purple-300">Use Bluff Token (Doubles stakes! Remaining: {me.bluffTokens})</label>
+                </div>
+              )}
             </div>
         );
     }
@@ -106,7 +91,7 @@ export default function GameScreen() {
   };
   
   const getInstructionText = () => {
-    if (!isMyTurn) return "Your Cards"; // Changed for clarity when it's not your turn
+    if (!isMyTurn) return "Your Cards";
     if (!selectedGate) return "1. Select a Gate Card";
     if (selectedGate.type === 'CNOT') {
       if (!controlQubit) return "2. Select YOUR face-up Qubit as CONTROL";
@@ -115,7 +100,7 @@ export default function GameScreen() {
     return "2. Select YOUR face-up Qubit to Apply Gate";
   };
   
-  const winner = gameState === 'game-over' ? players.find(p => p.score >= 5) : null;
+  const winner = gameState === 'game-over' ? players.sort((a, b) => b.score - a.score)[0] : null;
   const hasRequestedRematch = myPlayerId ? rematchRequestedBy.includes(myPlayerId) : false;
 
   return (
@@ -132,14 +117,22 @@ export default function GameScreen() {
         </div>
       )}
       <div className="max-w-7xl mx-auto grid grid-cols-4 gap-8">
-        <div className="col-span-1">
-          <h1 className="text-4xl font-bold text-cyan-400 mb-8">Quantum Bluff</h1>
+        <div className="col-span-1 space-y-4">
+          <h1 className="text-4xl font-bold text-cyan-400">Quantum Bluff</h1>
           <Scoreboard />
-          <div className="mt-6 bg-slate-800/50 p-4 rounded-lg border border-slate-700 text-center">
+          <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 text-center">
             <h3 className="text-lg font-bold text-white mb-2">Target State</h3>
             <p className="font-mono text-4xl text-yellow-300 tracking-widest">{targetState}</p>
           </div>
-          <div className="mt-4 text-lg">
+          <div className="text-center">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">Time Left</h3>
+            <p className={`font-mono text-6xl ${timer <= 10 ? 'text-red-500 animate-pulse' : 'text-white'}`}>{timer}</p>
+          </div>
+          <div className="text-center">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">Round</h3>
+            <p className="font-mono text-2xl text-white">{round} / {maxRounds}</p>
+          </div>
+          <div className="text-lg">
             Turn: <span className={isMyTurn ? "text-green-400 font-bold" : "text-red-400"}>{isMyTurn ? "Your Turn" : "Opponent's Turn"}</span>
           </div>
         </div>
@@ -148,19 +141,7 @@ export default function GameScreen() {
           <div className="mb-12 h-56">
             <h2 className="text-xl font-bold text-white mb-4">{opponent ? `${opponent.name}'s Hand` : "Opponent's Hand"}</h2>
             <div className="flex space-x-4">
-              {opponent && opponent.hand.map((card, index) => {
-                const isRevealed = revealedCard?.id === card.id;
-                return (
-                  <QubitCard 
-                    key={card.id} id={card.id}
-                    isFaceDown={!isRevealed}
-                    state={isRevealed ? revealedCard.finalState : null}
-                    isClickable={isMyTurn && selectedGate?.type === 'CNOT' && !!controlQubit}
-                    onClick={() => handleQubitCardClick(card.id, index, true, true)}
-                    isHighlighted={lastMove?.playerId === opponent.id && lastMove?.qubitId === card.id} 
-                  />
-                );
-              })}
+              {opponent && opponent.hand.map((card, index) => ( <QubitCard key={card.id} id={card.id} isFaceDown={!revealedCard || revealedCard.id !== card.id} state={revealedCard?.id === card.id ? revealedCard.finalState : null} isClickable={isMyTurn && selectedGate?.type === 'CNOT' && !!controlQubit} onClick={() => handleQubitCardClick(card.id, index, true, true)} isHighlighted={lastMove?.playerId === opponent.id && lastMove?.qubitId === card.id} /> ))}
             </div>
           </div>
           <div className="border-t-2 border-cyan-700 pt-8">
@@ -175,17 +156,7 @@ export default function GameScreen() {
               <div className="flex space-x-4">
                 {myHand.map((card, index) => {
                   const isRevealed = revealedCard?.id === card.id;
-                  return (
-                    <QubitCard 
-                      key={card.id} id={card.id}
-                      isFaceDown={isRevealed ? false : card.isFaceDown} 
-                      state={isRevealed ? revealedCard.finalState : card.state} 
-                      isClickable={isMyTurn && !!selectedGate}
-                      isControl={controlQubit === card.id}
-                      onClick={() => handleQubitCardClick(card.id, index, false, card.isFaceDown)} 
-                      isHighlighted={lastMove?.playerId === myPlayerId && lastMove?.qubitId === card.id} 
-                    />
-                  );
+                  return (<QubitCard key={card.id} id={card.id} isFaceDown={isRevealed ? false : card.isFaceDown} state={isRevealed ? revealedCard.finalState : card.state} isClickable={isMyTurn && !!selectedGate} isControl={controlQubit === card.id} onClick={() => handleQubitCardClick(card.id, index, false, card.isFaceDown)} isHighlighted={lastMove?.playerId === myPlayerId && lastMove?.qubitId === card.id} />);
                 })}
               </div>
             </div>

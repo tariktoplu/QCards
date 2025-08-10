@@ -1,36 +1,36 @@
-import axios from 'axios';
 import { Server } from 'socket.io';
 import { GameRoom, Player } from '../types/game';
 import { WINNING_SCORE, dealFromDeck, createHandWithIds } from './state';
+import axios from 'axios';
 
-export async function applyGate(
-  targetState: string | null,
-  gateType: string,
-  controlState?: string | null
-): Promise<string | null> {
-  if (gateType === 'CNOT') {
-    if (controlState === '|1>') {
-      return await applyGate(targetState, 'X');
+export async function applyGate(targetState: string | null, gateType: string, controlState?: string | null): Promise<string | null> {
+    if (gateType === 'CNOT') {
+        if (controlState === '|1>') return await applyGate(targetState, 'X');
+        return targetState;
     }
-    return targetState;
-  }
-  try {
-    let initialStateForSim: string | null = null;
-    if (targetState === '|0>') initialStateForSim = '0';
-    else if (targetState === '|1>') initialStateForSim = '1';
-    const response = await axios.post('http://localhost:8000/simulate', { initial_state: initialStateForSim, gate: gateType });
-    return response.data.final_state;
-  } catch (error) {
-    console.error("[SERVER] Error calling simulation service:", error);
-    return "|error>";
-  }
+    try {
+        let initialStateForSim: string | null = null;
+        if (targetState === '|0>') initialStateForSim = '0';
+        else if (targetState === '|1>') initialStateForSim = '1';
+        const response = await axios.post('http://localhost:8000/simulate', { initial_state: initialStateForSim, gate: gateType });
+        return response.data.final_state;
+    } catch (error) {
+        console.error("[SERVER] Error calling simulation service:", error);
+        return "|error>";
+    }
 }
 
 export function checkForWinner(room: GameRoom): boolean {
-  const winner = room.players.find(p => p.score >= WINNING_SCORE);
-  if (winner) {
+  if (room.round > room.maxRounds) {
     room.gameState = 'game-over';
-    room.lastMessage = `Game Over! ${winner.name} has won the game!`;
+    const winner = room.players.reduce((p1, p2) => p1.score > p2.score ? p1 : p2);
+    room.lastMessage = `Max rounds reached! ${winner.name} wins with the highest score!`;
+    return true;
+  }
+  const winnerByScore = room.players.find(p => p.score >= WINNING_SCORE);
+  if (winnerByScore) {
+    room.gameState = 'game-over';
+    room.lastMessage = `Game Over! ${winnerByScore.name} has won the game!`;
     return true;
   }
   return false;
@@ -55,77 +55,59 @@ export function resolveChallenge(room: GameRoom) {
   const declarer = room.players.find(p => p.id === activeDeclaration.playerId);
   const challenger = room.players.find(p => p.id !== activeDeclaration.playerId);
   if (!declarer || !challenger) return;
-
-  const cardIndex = declarer.hand.findIndex(c => c.id === activeDeclaration.qubitId);
-  // Also check opponent's hand in case CNOT targeted them
-  const opponentCardIndex = challenger.hand.findIndex(c => c.id === activeDeclaration.qubitId);
   
-  if (cardIndex === -1 && opponentCardIndex === -1) return; // Card not found in either hand
-
-  // --- ENTANGLEMENT BONUS LOGIC ---
   if (room.entangledPair && (activeDeclaration.qubitId === room.entangledPair.controlId || activeDeclaration.qubitId === room.entangledPair.targetId)) {
-    const cnotPlayer = declarer; // The one who played the CNOT
+    const cnotPlayer = declarer;
     const otherPlayer = challenger;
-
     const controlCard = cnotPlayer.hand.find(c => c.id === room.entangledPair!.controlId);
-    let targetCard = cnotPlayer.hand.find(c => c.id === room.entangledPair!.targetId);
-    if (!targetCard) {
-        targetCard = otherPlayer.hand.find(c => c.id === room.entangledPair!.targetId);
-    }
-
+    let targetCard = cnotPlayer.hand.find(c => c.id === room.entangledPair!.targetId) || otherPlayer.hand.find(c => c.id === room.entangledPair!.targetId);
     if (controlCard && targetCard) {
         const collapseResult = Math.random() < 0.5 ? '|0>' : '|1>';
         controlCard.state = collapseResult;
         targetCard.state = collapseResult;
-        
-        room.lastMessage = `ENTANGLEMENT BONUS! Both cards collapsed to ${collapseResult}!`;
+        room.lastMessage = `ENTANGLEMENT! Both cards collapsed to ${collapseResult}!`;
         cnotPlayer.score += 3;
-        
-        // Entanglement bonus overrides normal scoring for this challenge
-        // We still need to replace the challenged card
         const cardToRemoveOwner = declarer.hand.some(c => c.id === activeDeclaration.qubitId) ? declarer : challenger;
         const idxToRemove = cardToRemoveOwner.hand.findIndex(c => c.id === activeDeclaration.qubitId);
-        cardToRemoveOwner.hand.splice(idxToRemove, 1);
+        if (idxToRemove > -1) cardToRemoveOwner.hand.splice(idxToRemove, 1);
         const newCards = dealFromDeck(room.decks.qubitDeck, 1);
         if (newCards.length > 0) {
           const newCard = createHandWithIds(newCards, 'q')[0];
           newCard.isFaceDown = false; newCard.state = '|0>';
           cardToRemoveOwner.hand.push(newCard);
         }
-
         room.currentTurn = challenger.id;
         room.activeDeclaration = null;
         room.lastMove = null;
-        room.entangledPair = null; // Entanglement is broken by measurement
-        return; // Exit function early
+        room.entangledPair = null;
+        return;
     }
   }
 
-  // --- NORMAL CHALLENGE LOGIC (if not entangled) ---
+  const cardIndex = declarer.hand.findIndex(c => c.id === activeDeclaration.qubitId);
+  if (cardIndex === -1) return;
   const challengedCard = declarer.hand[cardIndex];
   let trueState = challengedCard.state;
   let collapseMessage = '';
-
   if (trueState === '|+>' || trueState === '|->') {
     const collapsedState = Math.random() < 0.5 ? '|0>' : '|1>';
-    collapseMessage = `The superposition ${trueState} collapsed to ${collapsedState}!`;
+    collapseMessage = `Superposition collapsed to ${collapsedState}!`;
     trueState = collapsedState;
   }
-  
   room.revealedCard = { id: challengedCard.id, finalState: trueState! };
   const wasDeclarationCorrect = trueState === activeDeclaration.declaredState;
 
   if (wasDeclarationCorrect) {
     challenger.score -= 1;
-    declarer.score += 2;
-    room.lastMessage = `Challenge FAILED! ${declarer.name}'s declaration of ${activeDeclaration.declaredState} was correct.`;
+    declarer.score += 1;
+    room.lastMessage = `Challenge FAILED! ${declarer.name}'s declaration was correct.`;
   } else {
     challenger.score += 2;
-    declarer.score -= 1;
-    room.lastMessage = `Challenge SUCCESSFUL! ${declarer.name} was bluffing. The true state was ${trueState}.`;
+    if (activeDeclaration.usedBluffToken) { declarer.score -= 2; }
+    room.lastMessage = `Challenge SUCCESSFUL! ${declarer.name} was bluffing.`;
   }
+  
   if (collapseMessage) { room.lastMessage += ` ${collapseMessage}`; }
-
   declarer.hand.splice(cardIndex, 1);
   const newQubitTemplates = dealFromDeck(room.decks.qubitDeck, 1);
   if (newQubitTemplates.length > 0) {
@@ -134,7 +116,6 @@ export function resolveChallenge(room: GameRoom) {
     declarer.hand.push(newCard);
     room.lastMessage += ` ${declarer.name} draws a new Qubit card.`;
   }
-
   room.currentTurn = challenger.id;
   room.activeDeclaration = null;
   room.lastMove = null;
