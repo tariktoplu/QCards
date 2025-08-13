@@ -40,7 +40,7 @@ export default function GameScreen() {
     if (isFaceDown && isOpponentCard) {
         if (selectedGate.type !== 'CNOT' || !controlQubit) return;
     }
-    const qubitName = `${isOpponentCard ? "Opponent's" : "Your"} Qubit ${index + 1}`;
+    const qubitName = `${isOpponentCard ? "Opponent's" : "Your"} Card #${index + 1}`;
     if (selectedGate.type === 'CNOT') {
       if (!controlQubit && !isOpponentCard && !isFaceDown) {
         setControlQubit(qubitId); return;
@@ -49,17 +49,19 @@ export default function GameScreen() {
         setTargetQubit({ id: qubitId, name: qubitName }); return;
       }
     } else {
-      if (isOpponentCard || isFaceDown) return;
+      if (isOpponentCard) return; // Cannot target opponent with single-qubit gates
       setTargetQubit({ id: qubitId, name: qubitName });
     }
   };
 
-  const handleDeclareState = () => {
+  const handleDeclareState = (isBluff: boolean) => {
     if (!socket || !targetQubit || !selectedGate) return;
     socket.emit('play_and_declare', {
       gateCardId: selectedGate.id, gateType: selectedGate.type,
-      targetQubitId: targetQubit.id, declaredState: declarationInput,
-      controlQubitId: controlQubit, usedBluffToken: useBluffToken
+      targetQubitId: targetQubit.id,
+      controlQubitId: controlQubit, 
+      usedBluffToken: useBluffToken,
+      declaredState: isBluff ? declarationInput : undefined,
     });
     setTargetQubit(null); setSelectedGate(null); setControlQubit(null); setUseBluffToken(false);
   };
@@ -70,22 +72,34 @@ export default function GameScreen() {
 
   const renderActionPanel = () => {
     if (activeDeclaration && currentTurn === myPlayerId) {
-        return ( <div className="mt-4 p-4 bg-slate-700 rounded-lg text-center"> <h3 className="text-lg font-bold mb-2">Opponent declared state: <span className="text-yellow-300 font-mono">{activeDeclaration.declaredState}</span></h3> <p>Do you challenge?</p> <div className="flex justify-center space-x-4 mt-2"> <button onClick={handleChallenge} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Challenge</button> <button onClick={handlePass} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Pass</button> </div> </div> );
+      return (
+        <div className="mt-4 p-4 bg-slate-700 rounded-lg text-center animate-pulse">
+          <h3 className="text-lg font-bold mb-2">Opponent declared state: <span className="text-yellow-300 font-mono">{activeDeclaration.declaredState}</span></h3>
+          <p>Do you challenge?</p>
+          <div className="flex justify-center space-x-4 mt-2">
+            <button onClick={handleChallenge} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Challenge</button>
+            <button onClick={handlePass} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Pass</button>
+          </div>
+        </div>
+      );
     }
     if (targetQubit) {
-        return (
-            <div className="mt-4 p-4 bg-slate-700 rounded-lg">
-              <h3 className="text-lg font-bold mb-2">Declare new state for Target: <span className="text-cyan-300">{targetQubit.name}</span></h3>
-              <input type="text" value={declarationInput} onChange={(e) => setDeclarationInput(e.target.value)} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 mr-2" />
-              <button onClick={handleDeclareState} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Declare</button>
-              {me && me.bluffTokens > 0 && (
-                <div className="mt-2 text-sm flex items-center justify-center">
-                  <input type="checkbox" id="bluffToken" checked={useBluffToken} onChange={(e) => setUseBluffToken(e.target.checked)} disabled={me.bluffTokens <= 0} className="h-4 w-4 bg-slate-700 border-slate-500"/>
-                  <label htmlFor="bluffToken" className="ml-2 text-purple-300">Use Bluff Token (Doubles stakes! Remaining: {me.bluffTokens})</label>
-                </div>
-              )}
+      return (
+        <div className="mt-4 p-4 bg-slate-700 rounded-lg">
+          <h3 className="text-lg font-bold mb-2">Move on <span className="text-cyan-300">{targetQubit.name}</span></h3>
+          <div className="flex items-center justify-center space-x-2">
+              <input type="text" value={declarationInput} onChange={(e) => setDeclarationInput(e.target.value)} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 w-24 text-center" />
+              <button onClick={() => handleDeclareState(true)} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Declare Bluff</button>
+              <button onClick={() => handleDeclareState(false)} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">Play Honestly</button>
+          </div>
+          {me && me.bluffTokens > 0 && (
+            <div className="mt-2 text-sm flex items-center justify-center">
+              <input type="checkbox" id="bluffToken" checked={useBluffToken} onChange={(e) => setUseBluffToken(e.target.checked)} disabled={me.bluffTokens <= 0} className="h-4 w-4 bg-slate-700 border-slate-500 text-purple-400 focus:ring-purple-500"/>
+              <label htmlFor="bluffToken" className="ml-2 text-purple-300">Use Bluff Token (Doubles stakes! Remaining: {me.bluffTokens})</label>
             </div>
-        );
+          )}
+        </div>
+      );
     }
     return null;
   };
@@ -97,7 +111,7 @@ export default function GameScreen() {
       if (!controlQubit) return "2. Select YOUR face-up Qubit as CONTROL";
       return "3. Select ANY Qubit as TARGET";
     }
-    return "2. Select YOUR face-up Qubit to Apply Gate";
+    return "2. Select a Qubit to Apply Gate";
   };
   
   const winner = gameState === 'game-over' ? players.sort((a, b) => b.score - a.score)[0] : null;
@@ -141,7 +155,10 @@ export default function GameScreen() {
           <div className="mb-12 h-56">
             <h2 className="text-xl font-bold text-white mb-4">{opponent ? `${opponent.name}'s Hand` : "Opponent's Hand"}</h2>
             <div className="flex space-x-4">
-              {opponent && opponent.hand.map((card, index) => ( <QubitCard key={card.id} id={card.id} isFaceDown={!revealedCard || revealedCard.id !== card.id} state={revealedCard?.id === card.id ? revealedCard.finalState : null} isClickable={isMyTurn && selectedGate?.type === 'CNOT' && !!controlQubit} onClick={() => handleQubitCardClick(card.id, index, true, true)} isHighlighted={lastMove?.playerId === opponent.id && lastMove?.qubitId === card.id} /> ))}
+              {opponent && opponent.hand.map((card, index) => {
+                const isRevealed = revealedCard?.id === card.id;
+                return (<QubitCard key={card.id} id={card.id} isFaceDown={!isRevealed} state={isRevealed ? revealedCard.finalState : null} isClickable={isMyTurn && selectedGate?.type === 'CNOT' && !!controlQubit} onClick={() => handleQubitCardClick(card.id, index, true, true)} isHighlighted={lastMove?.playerId === opponent.id && lastMove?.qubitId === card.id} />);
+              })}
             </div>
           </div>
           <div className="border-t-2 border-cyan-700 pt-8">

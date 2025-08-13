@@ -1,5 +1,5 @@
 import { Server, Socket } from 'socket.io';
-import { GameRoom } from './types/game';
+import { GameRoom, Qubit } from './types/game';
 import { gameRooms, createNewRoom, addPlayerToRoom, resetRoomForRematch, dealFromDeck, createHandWithIds, TURN_TIMER_SECONDS, WINNING_SCORE } from './game/state';
 import { applyGate, resolveChallenge, checkForWinner, checkTargetStateBonus } from './game/logic';
 
@@ -24,22 +24,19 @@ function startGameLoop(io: Server, room: GameRoom) {
                 delete gameLoopIntervals[room.roomId];
                 return;
             };
-
-            if (room.activeDeclaration) { // Auto-pass a challenge
+            if (room.activeDeclaration) {
                 const declarer = room.players.find(p => p.id === room.activeDeclaration!.playerId);
                 if (declarer) declarer.score += 1;
                 room.lastMessage = `${currentPlayer.name} ran out of time and passed.`;
-                room.currentTurn = currentPlayer.id; // It becomes their turn to play a card
-            } else { // Skip their turn to play a card
+                room.currentTurn = currentPlayer.id;
+            } else {
                 room.lastMessage = `${currentPlayer.name} ran out of time! Turn skipped.`;
                 room.currentTurn = opponent.id;
             }
             room.timer = TURN_TIMER_SECONDS;
             room.activeDeclaration = null;
-            // Send a full update after a timeout action
             room.players.forEach(p => io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards }));
         } else {
-            // Just send a tick update to all players in the room
             io.to(room.roomId).emit('timer_tick', room.timer);
         }
     }, 1000);
@@ -49,7 +46,6 @@ export function initializeSocketEvents(io: Server) {
   io.on('connection', (socket: Socket) => {
     console.log(`Player connected: ${socket.id}`);
     const findRoomBySocketId = (socketId: string) => Object.values(gameRooms).find(r => r.players.some(p => p.id === socketId));
-
     socket.on('join_game', (playerName: string) => {
       let availableRoom = Object.values(gameRooms).find(r => r.players.length === 1 && r.gameState === 'in-game');
       let currentRoom: GameRoom;
@@ -73,7 +69,7 @@ export function initializeSocketEvents(io: Server) {
     
     socket.on('play_and_declare', async (data: {
       gateCardId: string, gateType: string, targetQubitId: string,
-      controlQubitId?: string, declaredState: string, usedBluffToken: boolean
+      controlQubitId?: string, declaredState?: string, usedBluffToken: boolean
     }) => {
         const room = findRoomBySocketId(socket.id);
         if (!room) return;
@@ -84,10 +80,11 @@ export function initializeSocketEvents(io: Server) {
         if (data.usedBluffToken && player.bluffTokens <= 0) return;
         if (data.usedBluffToken) player.bluffTokens--;
         let finalState: string | null = null;
+        let targetCard: Qubit | undefined;
         if (data.gateType === 'CNOT' && data.controlQubitId) {
             const controlCard = player.hand.find(c => c.id === data.controlQubitId);
             const opponent = room.players.find(p => p.id !== socket.id);
-            let targetCard = player.hand.find(c => c.id === data.targetQubitId) || opponent?.hand.find(c => c.id === data.targetQubitId);
+            targetCard = player.hand.find(c => c.id === data.targetQubitId) || opponent?.hand.find(c => c.id === data.targetQubitId);
             if (controlCard && targetCard) {
                 if (controlCard.isFaceDown) controlCard.isFaceDown = false;
                 if (targetCard.isFaceDown) targetCard.isFaceDown = false;
@@ -98,7 +95,7 @@ export function initializeSocketEvents(io: Server) {
                 targetCard.state = finalState;
             }
         } else {
-            const targetCard = player.hand.find(card => card.id === data.targetQubitId);
+            targetCard = player.hand.find(card => card.id === data.targetQubitId);
             if (targetCard) {
                 if (targetCard.isFaceDown) targetCard.isFaceDown = false;
                 finalState = await applyGate(targetCard.state, data.gateType);
@@ -116,14 +113,22 @@ export function initializeSocketEvents(io: Server) {
             }
             const newGateCards = createHandWithIds(newGateCardTemplates, 'g');
             player.gateCards.push(...newGateCards);
-            room.activeDeclaration = { qubitId: data.targetQubitId, declaredState: data.declaredState, playerId: socket.id, usedBluffToken: data.usedBluffToken };
+            
+            const declaration = data.declaredState || finalState;
+            room.activeDeclaration = { qubitId: data.targetQubitId, declaredState: declaration, playerId: socket.id, usedBluffToken: data.usedBluffToken };
             room.lastMove = { playerId: socket.id, gateCardId: data.gateCardId, qubitId: data.targetQubitId };
             const opponent = room.players.find(p => p.id !== socket.id);
             if (opponent) {
                 room.currentTurn = opponent.id;
-                room.lastMessage = `${player.name} played a ${data.gateType} gate. It's ${opponent.name}'s turn to respond.`;
-                room.timer = TURN_TIMER_SECONDS;
+                room.lastMessage = `${player.name} played a ${data.gateType} gate.`;
+                if(data.declaredState) {
+                    room.lastMessage += ` They declared the new state is ${declaration}. It's ${opponent.name}'s turn to respond.`;
+                } else {
+                    room.lastMessage += ` It's now ${opponent.name}'s turn.`;
+                    room.round++;
+                }
             }
+            room.timer = TURN_TIMER_SECONDS;
             room.players.forEach(p => io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards }));
         }
     });
@@ -135,7 +140,10 @@ export function initializeSocketEvents(io: Server) {
         resolveChallenge(room);
         if (declarer) { checkTargetStateBonus(declarer, room); }
         const isGameOver = checkForWinner(room);
-        if (!isGameOver) room.timer = TURN_TIMER_SECONDS;
+        if (!isGameOver) {
+            room.timer = TURN_TIMER_SECONDS;
+            room.round++;
+        }
         room.players.forEach(p => io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards }));
     });
 
@@ -168,7 +176,7 @@ export function initializeSocketEvents(io: Server) {
         }
         if (room.rematchRequestedBy.length === room.players.length) {
             resetRoomForRematch(room);
-            startGameLoop(io, room); // Restart the timer loop for the new game
+            startGameLoop(io, room);
         }
         room.players.forEach(p => {
             io.to(p.id).emit('gameUpdate', { ...room, myHand: p.hand, gateCards: p.gateCards });
